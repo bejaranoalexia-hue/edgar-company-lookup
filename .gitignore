@@ -1,0 +1,9 @@
+scripts/.edgar_cache/
+build/
+batch_*.json
+batch_*_body_only.txt
+superior_*
+invalid_emails*
+email_validation*
+part1_body.txt
+part2_body.txt

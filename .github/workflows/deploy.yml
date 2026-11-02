@@ -1,0 +1,59 @@
+name: Publish EDGAR report
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: Ticker or company name
+        required: false
+        default: AAPL
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Refresh the report from EDGAR
+        env:
+          EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}
+          TICKER: ${{ github.event.inputs.ticker || 'AAPL' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EDGAR_USER_AGENT}" ]; then
+            export EDGAR_USER_AGENT="EdgarCompanyLookup edgar-lookup@example.com"
+          fi
+          mkdir -p build
+          if python scripts/edgar_lookup.py financials "$TICKER" > build/financials.json \
+            && python scripts/edgar_lookup.py vendors "$TICKER" > build/vendors.json
+          then
+            python scripts/render_report.py build/financials.json build/vendors.json site/index.html
+          else
+            echo "EDGAR refresh failed. Publishing the report already in the repository."
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
