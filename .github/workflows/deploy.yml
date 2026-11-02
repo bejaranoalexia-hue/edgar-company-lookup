@@ -8,7 +8,7 @@ on:
       ticker:
         description: Ticker or company name
         required: false
-        default: AAPL
+        default: HTZ
 
 permissions:
   contents: read
@@ -30,7 +30,7 @@ jobs:
       - name: Refresh the report from EDGAR
         env:
           EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}
-          TICKER: ${{ github.event.inputs.ticker || 'AAPL' }}
+          TICKER: ${{ github.event.inputs.ticker || 'HTZ' }}
         run: |
           set -euo pipefail
           if [ -z "${EDGAR_USER_AGENT}" ]; then
