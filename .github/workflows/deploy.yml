@@ -8,7 +8,19 @@ on:
       ticker:
         description: Ticker or company name
         required: false
-        default: HTZ
+        default: Azamara Cruises
+      private:
+        description: The company does not file with the SEC
+        type: boolean
+        default: true
+      aliases:
+        description: Other names to search, comma-separated (private companies)
+        required: false
+        default: Azamara
+      sic:
+        description: Industry SIC code (private companies), e.g. 4400 for cruise lines
+        required: false
+        default: "4400"
       tech:
         description: Comma-separated vendors to check against CISA KEV (optional)
         required: false
@@ -39,7 +51,10 @@ jobs:
         env:
           EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
-          TICKER: ${{ github.event.inputs.ticker || 'HTZ' }}
+          TICKER: ${{ github.event.inputs.ticker || 'Azamara Cruises' }}
+          PRIVATE: ${{ github.event.inputs.private || 'true' }}
+          ALIASES: ${{ github.event.inputs.aliases || 'Azamara' }}
+          SIC: ${{ github.event.inputs.sic || '4400' }}
           TECH: ${{ github.event.inputs.tech || '' }}
           SKIP_NEWS: ${{ github.event.inputs.skip_news || 'false' }}
         run: |
@@ -48,6 +63,10 @@ jobs:
             export EDGAR_USER_AGENT="EdgarCompanyLookup edgar-lookup@example.com"
           fi
           args=("$TICKER")
+          if [ "$PRIVATE" = "true" ]; then
+            args+=(--private --sic "$SIC")
+            if [ -n "$ALIASES" ]; then args+=(--aliases "$ALIASES"); fi
+          fi
           if [ -n "$TECH" ]; then args+=(--tech "$TECH"); fi
           if [ "$SKIP_NEWS" = "true" ]; then args+=(--no-news); fi
           mkdir -p build

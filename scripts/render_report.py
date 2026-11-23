@@ -54,9 +54,53 @@ def employees(item: object) -> str:
 # ---------------------------------------------------------------- sections
 
 
+def industry_rows(industry: dict) -> list[tuple[str, str]]:
+    sic = f"{industry.get('sic') or 'Not given'} {industry.get('sic_description') or ''}".strip()
+    return [
+        ("SIC code", esc(sic)),
+        ("CISA sector", esc(industry.get("cisa_sector") or "No match, using SIC description")),
+        ("News terms", esc(", ".join(industry.get("news_terms") or []))),
+    ]
+
+
+def private_company_html(company: dict, industry: dict) -> str:
+    identity = company.get("identity") or {}
+    mentions = company.get("mentions_elsewhere") or {}
+    aliases = ", ".join(identity.get("aliases") or [])
+    rows = [
+        ("Status", "Private company. It does not file with the SEC, so there is no employee count, "
+                   "income statement or 10-K vendor list."),
+        ("Also searched as", esc(aliases or "None")),
+    ]
+    items = []
+    for m in mentions.get("mentions") or []:
+        quote = f"<p>{esc(m['snippet'])}</p>" if m.get("snippet") else ""
+        items.append(
+            f"<blockquote><p><strong>{esc(m.get('filer'))}</strong> "
+            f'<span class="meta">{esc(m.get("kind"))}</span></p>{quote}'
+            f'<p class="meta">{esc(m.get("form"))} filed {esc(m.get("filed"))}. {link(m.get("url"), "Filing")}</p>'
+            "</blockquote>"
+        )
+    window = mentions.get("window") or {}
+    meta = (
+        f'<p class="meta">{esc(mentions.get("filers"))} companies mention it in SEC filings from '
+        f'{esc(window.get("start"))} to {esc(window.get("end"))}. Newest filing per company:</p>'
+        if mentions.get("filers")
+        else ""
+    )
+    return (
+        "<section><h2>Who the company is</h2>"
+        f"{table(rows)}<h3>Industry</h3>{table(industry_rows(industry))}"
+        f"<h3>What other companies' SEC filings say about it</h3>{meta}{''.join(items)}{error_or_note(mentions)}"
+        "</section>"
+    )
+
+
 def company_html(company: dict, industry: dict) -> str:
     if company.get("error"):
         return f"<section><h2>Who the company is</h2>{error_or_note(company)}</section>"
+    if company.get("private"):
+        return private_company_html(company, industry)
     identity = company.get("identity") or {}
     size = company.get("size") or {}
     identity_rows = [
@@ -68,11 +112,6 @@ def company_html(company: dict, industry: dict) -> str:
         ("Website", link(identity.get("website"), identity.get("website")) if identity.get("website") else "Not listed"),
         ("Former names", esc(", ".join(identity.get("former_names") or []) or "None")),
     ]
-    industry_rows = [
-        ("SIC code", esc(f"{industry.get('sic')} {industry.get('sic_description') or ''}")),
-        ("CISA sector", esc(industry.get("cisa_sector") or "No match, using SIC description")),
-        ("News terms", esc(", ".join(industry.get("news_terms") or []))),
-    ]
     size_rows = [
         ("Employees", employees(size.get("employees"))),
         ("Size band", esc(size.get("size_band") or "Unknown")),
@@ -81,14 +120,14 @@ def company_html(company: dict, industry: dict) -> str:
     ]
     return (
         "<section><h2>Who the company is</h2>"
-        f"{table(identity_rows)}<h3>Industry</h3>{table(industry_rows)}"
+        f"{table(identity_rows)}<h3>Industry</h3>{table(industry_rows(industry))}"
         f"<h3>Size</h3>{table(size_rows)}</section>"
     )
 
 
 def cyber_html(cyber: dict) -> str:
     head = "<section><h2>Cybersecurity risk signals</h2>"
-    if cyber.get("error"):
+    if cyber.get("error") or cyber.get("private"):
         return head + error_or_note(cyber) + "</section>"
     summary = cyber.get("summary") or {}
     annual = summary.get("latest_10k") or {}
@@ -130,7 +169,8 @@ def news_html(news: dict) -> str:
             item.get("severity"),
             item.get("source"),
             ", ".join(c for c in item.get("cves") or [] if c),
-            "matched: " + ", ".join(item.get("matched_terms") or []),
+            "names the company" if item.get("names_company") else None,
+            "matched: " + ", ".join(item.get("matched_terms") or []) if item.get("matched_terms") else None,
         )
         extra = " · ".join(str(x) for x in parts if x)
         summary = f"<p>{esc(item['summary'])}</p>" if item.get("summary") else ""
@@ -237,14 +277,14 @@ def render(profile: dict) -> str:
   <header>
     <h1>{esc(title)}</h1>
     <p class="meta">Company and cyber-risk profile from SEC EDGAR, CybersecurityNews.us and CISA KEV.
-    CIK {esc(basic.get("cik"))}. Generated {esc(profile.get("generated_at"))}.</p>
+    {f'CIK {esc(basic.get("cik"))}.' if basic.get("cik") else "Private company."} Generated {esc(profile.get("generated_at"))}.</p>
   </header>
   {company_html(company, profile.get("industry") or {})}
   {cyber_html(profile.get("cyber_risk") or {})}
   {news_html(profile.get("industry_news") or {})}
   {kev_html(profile.get("kev") or {})}
-  {financials_html(company.get("financials") or {})}
-  {vendors_html(company.get("vendors") or {})}
+  {"" if company.get("private") else financials_html(company.get("financials") or {})}
+  {"" if company.get("private") else vendors_html(company.get("vendors") or {})}
   <footer>{f"<h2>Lookup errors</h2><ul>{errors}</ul>" if errors else ""}
     <p>Sources: <a href="https://www.sec.gov/edgar/search/">SEC EDGAR</a>,
     <a href="https://cybersecuritynews.us">CybersecurityNews.us</a>,

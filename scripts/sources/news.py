@@ -101,9 +101,15 @@ def story_url(story: dict) -> str | None:
     return previews[0].get("url") if previews else story.get("url")
 
 
-def search_industry(terms: list[str], refresh: bool) -> dict:
+def search_industry(terms: list[str], refresh: bool, company_terms: list[str] | None = None) -> dict:
+    """Stories matching the industry terms, plus any that name the company.
+
+    company_terms are matched locally like industry terms; they are never
+    sent to the API. Stories naming the company are listed first.
+    """
     pattern = term_pattern(terms)
-    if pattern is None:
+    company_pattern = term_pattern([t for t in company_terms or [] if len(t) >= 4])
+    if pattern is None and company_pattern is None:
         return {"topic": "industry_news", "configured": True, "terms": [], "items": [],
                 "note": "No industry terms to match, so news was skipped."}
 
@@ -113,8 +119,10 @@ def search_industry(terms: list[str], refresh: bool) -> dict:
 
     matched = []
     for story in stories:
-        hits = sorted({m.group(0).lower() for m in pattern.finditer(story_text(story))})
-        if not hits:
+        text = story_text(story)
+        hits = sorted({m.group(0).lower() for m in pattern.finditer(text)}) if pattern else []
+        names_company = bool(company_pattern and company_pattern.search(text))
+        if not hits and not names_company:
             continue
         source = story.get("primarySource") or {}
         matched.append(
@@ -133,10 +141,15 @@ def search_industry(terms: list[str], refresh: bool) -> dict:
                 ],
                 "kev": bool(story.get("kev")),
                 "matched_terms": hits,
+                "names_company": names_company,
             }
         )
-    matched.sort(key=lambda item: (len(item["matched_terms"]), str(item["date"] or "")), reverse=True)
-    matched = sorted(matched[:MAX_RESULTS], key=lambda item: str(item["date"] or ""), reverse=True)
+    matched.sort(
+        key=lambda item: (item["names_company"], len(item["matched_terms"]), str(item["date"] or "")), reverse=True
+    )
+    matched = sorted(
+        matched[:MAX_RESULTS], key=lambda item: (item["names_company"], str(item["date"] or "")), reverse=True
+    )
     dates = sorted(str(s.get("publishedAt") or "") for s in stories if s.get("publishedAt"))
     return {
         "topic": "industry_news",
@@ -147,6 +160,7 @@ def search_industry(terms: list[str], refresh: bool) -> dict:
         "window": {"oldest": dates[0][:10], "newest": dates[-1][:10]} if dates else None,
         "pages_read": calls,  # cached pages count here too; repeat runs the same day send nothing
         "items": matched,
+        "company_mentions": sum(1 for item in matched if item["names_company"]),
         "errors": errors,
         "note": None if matched else "No recent stories in these categories matched the industry terms.",
     }

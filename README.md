@@ -21,6 +21,16 @@ py -3 scripts/build_profile.py HTZ --tech "Microsoft,Cisco" > build/profile.json
 py -3 scripts/render_report.py build/profile.json site/index.html
 ```
 
+For a private company, which files nothing with the SEC, give its name, any other names, and an industry code:
+
+```powershell
+py -3 scripts/build_profile.py "Azamara Cruises" --private --aliases Azamara --sic 4400 > build/profile.json
+```
+
+The company section then lists what other companies' SEC filings say about it (former owners, vendors,
+board biographies), and news stories that name it are listed first. There is no employee count, income
+statement, 10-K vendor list or 8-K incident check for private companies.
+
 Options: `--sector "Healthcare and Public Health"` overrides the sector, `--no-news` skips the news API,
 `--cyber-years 3` sets how far back to search 8-Ks, `--refresh` ignores the cache.
 

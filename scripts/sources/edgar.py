@@ -577,6 +577,114 @@ def named_vendors(text: str, company_name: str) -> list[dict]:
     return list(found.values())
 
 
+# What a mention in another company's filing usually means, by form type.
+MENTION_KINDS = (
+    (("DEF 14A", "PRE 14A", "DEFA14A"), "Proxy statement (director or executive biography)"),
+    (("8-K",), "Press release or current report"),
+    (("10-K", "10-Q", "20-F", "40-F"), "Annual or quarterly report"),
+    (("S-1", "F-1", "S-4", "F-4", "DRS", "424B", "FWP"), "Registration statement or prospectus"),
+)
+
+
+def mention_kind(form: str) -> str:
+    for prefixes, label in MENTION_KINDS:
+        if any(form.startswith(prefix) for prefix in prefixes):
+            return label
+    return "Other filing"
+
+
+def window_around(text: str, pattern: re.Pattern[str], width: int = 220) -> str | None:
+    """About two sentences of text centered on the first match, cut at word edges."""
+    flat = SPACE_RE.sub(" ", text)
+    match = pattern.search(flat)
+    if not match:
+        return None
+    start = max(0, match.start() - width)
+    end = min(len(flat), match.end() + width)
+    sentence_start = flat.rfind(". ", start, match.start())
+    if sentence_start != -1:
+        start = sentence_start + 2
+    sentence_end = flat.find(". ", match.end(), end)
+    if sentence_end != -1:
+        end = sentence_end + 1
+    snippet = flat[start:end].strip()
+    prefix = "..." if start > 0 and sentence_start == -1 else ""
+    suffix = "..." if end < len(flat) and sentence_end == -1 else ""
+    return f"{prefix}{snippet}{suffix}"
+
+
+def mentions_elsewhere(names: list[str], years: int, refresh: bool, limit: int = 8) -> dict:
+    """Filings by OTHER companies that mention a company, newest filing per filer.
+
+    Used for private companies, which file nothing themselves. Former parents,
+    vendors, partners and board members' other companies show up here.
+    """
+    terms = [name.strip() for name in names if name.strip()]
+    if not terms:
+        raise SourceError("A company name is required to search other filings.")
+    query = " OR ".join(f'"{term}"' for term in terms)
+    end = date.today()
+    start = end - timedelta(days=365 * years)
+    params = urllib.parse.urlencode(
+        {"q": query, "dateRange": "custom", "startdt": start.isoformat(), "enddt": end.isoformat()}
+    )
+    endpoint = f"{SEARCH_URL}?{params}"
+    payload = get_json(endpoint, refresh)
+    hits_root = payload.get("hits") or {}
+    total = hits_root.get("total")
+
+    # Newest filing per filer; a final proxy beats its preliminary draft.
+    by_filer: dict[str, dict] = {}
+    for hit in hits_root.get("hits") or []:
+        source = hit.get("_source") or {}
+        filer = str((source.get("display_names") or ["Unknown filer"])[0])
+        rank = (str(source.get("file_date") or ""), not str(source.get("form") or "").startswith("PRE"))
+        if filer not in by_filer or rank > by_filer[filer]["rank"]:
+            by_filer[filer] = {"hit": hit, "rank": rank}
+
+    pattern = re.compile("|".join(re.escape(term) for term in terms), re.IGNORECASE)
+    ordered = sorted(by_filer.items(), key=lambda item: item[1]["rank"], reverse=True)
+    mentions = []
+    seen_snippets: set[str] = set()
+    for index, (filer, entry) in enumerate(ordered):
+        if len(mentions) >= limit:
+            break
+        source = entry["hit"].get("_source") or {}
+        url = filing_url(entry["hit"])
+        snippet = None
+        if url:
+            if index:
+                time.sleep(0.15)
+            snippet = window_around(html_to_text(get_text(url, refresh)), pattern)
+        # Several lenders file the same prospectus text; keep the first copy.
+        if snippet and snippet.casefold()[:160] in seen_snippets:
+            continue
+        if snippet:
+            seen_snippets.add(snippet.casefold()[:160])
+        form = str(source.get("form") or source.get("file_type") or "")
+        mentions.append(
+            {
+                "filer": re.sub(r"\s+\(CIK \d+\)$", "", filer).strip(),
+                "form": form,
+                "document_type": source.get("file_type"),
+                "kind": mention_kind(form),
+                "filed": source.get("file_date"),
+                "url": url,
+                "snippet": snippet,
+            }
+        )
+    return {
+        "topic": "mentions_elsewhere",
+        "names": terms,
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "total_hits": total.get("value") if isinstance(total, dict) else total,
+        "filers": len(by_filer),
+        "mentions": mentions,
+        "source": {"endpoint": endpoint},
+        "note": None if mentions else "No other company's SEC filings mention this name in the search window.",
+    }
+
+
 def search_vendors(company: dict, years: int, refresh: bool) -> dict:
     """Vendors named in the company's latest 10-K(s), each with the service it provides."""
     if years < 1:
