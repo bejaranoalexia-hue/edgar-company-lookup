@@ -36,8 +36,6 @@ TAG_RE = re.compile(r"<[^>]+>")
 SPACE_RE = re.compile(r"\s+")
 SCRIPT_RE = re.compile(r"(?is)<(script|style|ix:header)\b[^>]*>.*?</\1>")
 BLOCK_RE = re.compile(r"(?i)</?(?:p|div|br|tr|h\d|li|table|section)\b[^>]*>")
-VENDOR_TERM_RE = re.compile(r"\b(suppliers?|vendors?|supply agreements?)\b", re.IGNORECASE)
-PARTY_RE = re.compile(r"\b(?:Inc|Corp|Corporation|Ltd|LLC|L\.P\.|Co)\b\.?")
 
 # Revenue bands used for the one-word size label in the profile.
 SIZE_BANDS = (
@@ -61,27 +59,47 @@ STATEMENTS = (
             ("eps_diluted", "Diluted EPS", ("EarningsPerShareDiluted",), True),
         ),
     ),
-    (
-        "balance_sheet",
-        (
-            ("assets", "Assets", ("Assets",), False),
-            ("current_assets", "Current assets", ("AssetsCurrent",), False),
-            ("cash", "Cash and cash equivalents", ("CashAndCashEquivalentsAtCarryingValue",), False),
-            ("liabilities", "Liabilities", ("Liabilities",), False),
-            ("current_liabilities", "Current liabilities", ("LiabilitiesCurrent",), False),
-            ("long_term_debt", "Long-term debt", ("LongTermDebt", "LongTermDebtNoncurrent"), False),
-            ("stockholders_equity", "Stockholders' equity", ("StockholdersEquity",), False),
-        ),
+)
+
+# Headcount from the 10-K "Human Capital" text, e.g. "we had approximately 25,000 employees".
+EMPLOYEE_RE = re.compile(
+    r"(?:had|have|employ(?:ed|s)?|workforce of|consisted of|total of|of)\s+"
+    r"(?:approximately|about|around|over|more than|nearly|roughly)?\s*"
+    r"(\d{1,3}(?:,\d{3})+|\d{2,6})\s+"
+    r"(?:[A-Za-z\-]+\s+){0,5}?"
+    r"(?:employees|team members|associates|colleagues|crew members|people|persons|individuals|workers)\b",
+    re.IGNORECASE,
+)
+
+# Named vendors. NAME is a run of capitalized words, optionally with a legal suffix.
+NAME = r"[A-Z][A-Za-z0-9&'.\-]*(?:\s+(?:[A-Z][A-Za-z0-9&'.\-]*|&|de|of|and)){0,4}(?:,?\s+(?:Inc|Corp|Corporation|Ltd|LLC|plc|S\.A|N\.V|GmbH|AG|SE|Co)\.?)?"
+VENDOR_PATTERNS = (
+    # "Cleo, a file-transfer vendor for the Company"
+    re.compile(rf"(?P<name>{NAME}),\s+(?:a|an|our|the)\s+(?P<service>[^,.;]{{3,80}}?)\s+(?:vendor|supplier|provider|partner|contractor)\b"),
+    # "agreements with Meyer Werft to build two ships" / "contract with X for Y"
+    re.compile(
+        rf"(?:agreements?|contracts?|arrangements?|partnership)\s+with\s+(?P<name>{NAME})"
+        rf"(?:\s*\([^)]{{0,40}}\))?\s+(?:for|to provide|to supply|to build|to construct|to operate|to deliver|under which)\s+"
+        rf"(?P<service>[^.;]{{3,100}})"
     ),
-    (
-        "cash_flow",
-        (
-            ("operating_cash_flow", "Operating cash flow", ("NetCashProvidedByUsedInOperatingActivities",), True),
-            ("investing_cash_flow", "Investing cash flow", ("NetCashProvidedByUsedInInvestingActivities",), True),
-            ("financing_cash_flow", "Financing cash flow", ("NetCashProvidedByUsedInFinancingActivities",), True),
-        ),
+    # "X, Inc. provides our ..." (legal suffix required to avoid "The Company provides")
+    re.compile(
+        rf"(?P<name>{NAME}(?:,?\s+(?:Inc|Corp|Corporation|Ltd|LLC|plc)\.?))\s+"
+        rf"(?:provides|supplies|manufactures|operates|services|hosts)\s+(?P<service>[^.;]{{3,100}})"
+    ),
+    # "we purchase/source/license X from Y"
+    re.compile(
+        rf"\b(?:purchase|purchases|source|sources|license|licenses|procure|lease|leases)\s+"
+        rf"(?P<service>[a-z][^.;]{{3,80}}?)\s+from\s+(?P<name>{NAME})"
     ),
 )
+# Words ignored when checking whether a "vendor" is really the company itself.
+LEGAL_WORDS = {"inc", "corp", "corporation", "ltd", "plc", "llc", "and", "company", "holdings", "group", "the", "global"}
+NOT_VENDORS = {
+    "the company", "company", "we", "our", "the", "board", "item", "note", "this", "these", "in", "as", "such",
+    "any", "each", "certain", "many", "some", "plaintiff", "mr", "ms", "management", "united states", "u.s",
+    "sec", "federal", "government", "congress", "the board", "a", "an", "it", "they", "third parties",
+}
 
 
 def get_json(url: str, refresh: bool) -> dict:
@@ -189,7 +207,12 @@ def overview(company: dict, refresh: bool) -> dict:
         facts = {}
     latest = latest_statement(facts) if facts else None
     revenue = line_value(latest, "income_statement", "revenue")
-    assets = line_value(latest, "balance_sheet", "assets")
+    employees = latest_dei(facts, "EntityNumberOfEmployees") if facts else None
+    if employees is None:
+        try:
+            employees = employees_from_10k(company, refresh)
+        except SourceError:
+            employees = None
 
     return {
         "company": company,
@@ -220,14 +243,11 @@ def overview(company: dict, refresh: bool) -> dict:
             "sic_description": sub.get("sicDescription"),
         },
         "size": {
-            "filer_category": sub.get("category"),
-            "revenue": revenue,
-            "total_assets": assets,
+            "employees": employees,
             "size_band": size_band(revenue),
+            "revenue": revenue,
             "fiscal_period_end": latest.get("period_end") if latest else None,
-            "public_float_usd": latest_dei(facts, "EntityPublicFloat"),
-            "shares_outstanding": latest_dei(facts, "EntityCommonStockSharesOutstanding"),
-            "employees": latest_dei(facts, "EntityNumberOfEmployees"),
+            "filer_category": sub.get("category"),
         },
         "source": {
             "submissions": SUBMISSIONS_URL.format(cik=company["cik"]),
@@ -491,40 +511,94 @@ def passages(text: str, term_re: re.Pattern[str], limit: int) -> list[dict]:
     return found
 
 
+def latest_10k_text(company: dict, refresh: bool) -> tuple[dict, str] | None:
+    """Newest 10-K main document as plain text, with its filing details."""
+    _endpoint, payload = full_text_search("employees", "10-K", company, 1, refresh)
+    hits = primary_filings((payload.get("hits") or {}).get("hits") or [], 1)
+    if not hits:
+        return None
+    source = hits[0].get("_source") or {}
+    url = filing_url(hits[0])
+    if not url:
+        return None
+    meta = {"form": source.get("form"), "filed": source.get("file_date"), "url": url}
+    return meta, html_to_text(get_text(url, refresh))
+
+
+def employees_from_10k(company: dict, refresh: bool) -> dict | None:
+    found = latest_10k_text(company, refresh)
+    if not found:
+        return None
+    meta, text = found
+    for chunk in text.split("\n"):
+        line = SPACE_RE.sub(" ", chunk).strip()
+        if "employ" not in line.lower() and "team member" not in line.lower():
+            continue
+        match = EMPLOYEE_RE.search(line)
+        if match:
+            value = int(match.group(1).replace(",", ""))
+            if value >= 10:
+                start = max(0, match.start() - 120)
+                return {
+                    "value": value,
+                    "as_of": meta["filed"],
+                    "form": meta["form"],
+                    "quote": line[start : match.end() + 40].strip(),
+                    "url": meta["url"],
+                }
+    return None
+
+
+def clean_service(text: str) -> str:
+    text = SPACE_RE.sub(" ", text).strip(" ,;:-")
+    text = re.split(r"\b(?:which|that|who|and may|but|however)\b", text)[0].strip(" ,;:-")
+    return text[:90]
+
+
+def named_vendors(text: str, company_name: str) -> list[dict]:
+    own = {w.casefold() for w in re.findall(r"[A-Za-z]{3,}", company_name)}
+    found: dict[str, dict] = {}
+    for chunk in text.split("\n"):
+        line = SPACE_RE.sub(" ", chunk).strip()
+        if len(line) < 30:
+            continue
+        for pattern in VENDOR_PATTERNS:
+            for match in pattern.finditer(line):
+                name = match.group("name").strip(" ,.")
+                key = name.casefold()
+                words = {w.casefold() for w in re.findall(r"[A-Za-z]{3,}", name)}
+                if key in NOT_VENDORS or len(name) < 3 or (words and words <= own | LEGAL_WORDS):
+                    continue
+                if key.split()[0] in NOT_VENDORS:
+                    continue
+                service = clean_service(match.group("service"))
+                if key not in found and service:
+                    found[key] = {"name": name, "service": service, "quote": line[:300]}
+    return list(found.values())
+
+
 def search_vendors(company: dict, years: int, refresh: bool) -> dict:
+    """Vendors named in the company's latest 10-K(s), each with the service it provides."""
     if years < 1:
         raise SourceError("--years must be at least 1.")
     endpoint, payload = full_text_search(VENDOR_QUERY, "10-K", company, years, refresh)
-    hits_root = payload.get("hits") or {}
-    total = hits_root.get("total")
-    total_value = total.get("value") if isinstance(total, dict) else total
-    mentions = []
-    for index, hit in enumerate(primary_filings(hits_root.get("hits") or [], years)):
+    vendors: dict[str, dict] = {}
+    for index, hit in enumerate(primary_filings((payload.get("hits") or {}).get("hits") or [], years)):
         if index:
             time.sleep(0.15)
         source = hit.get("_source") or {}
         url = filing_url(hit)
-        found = passages(html_to_text(get_text(url, refresh)), VENDOR_TERM_RE, 40) if url else []
-        for passage in found:
-            passage["names_a_party"] = bool(PARTY_RE.search(passage["snippet"]))
-        found.sort(key=lambda item: not item["names_a_party"])
-        for passage in found[:8]:
-            mentions.append(
-                {
-                    **passage,
-                    "form": source.get("form") or source.get("file_type"),
-                    "filed": source.get("file_date"),
-                    "period_end": source.get("period_ending"),
-                    "accession": source.get("adsh"),
-                    "filing_url": url,
-                }
+        if not url:
+            continue
+        for vendor in named_vendors(html_to_text(get_text(url, refresh)), company["name"]):
+            vendors.setdefault(
+                vendor["name"].casefold(),
+                {**vendor, "form": source.get("form"), "filed": source.get("file_date"), "filing_url": url},
             )
     return {
         "topic": "vendors",
         "company": company,
-        "source": {"endpoint": endpoint, "hits": total_value or 0},
-        "mentions": mentions,
-        "note": None
-        if mentions
-        else "No supplier or vendor passages found in this company's 10-K filings for the search window.",
+        "source": {"endpoint": endpoint},
+        "vendors": list(vendors.values()),
+        "note": None if vendors else "The latest 10-K does not name specific vendors with the services they provide.",
     }

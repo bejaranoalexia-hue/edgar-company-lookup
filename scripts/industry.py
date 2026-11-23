@@ -27,6 +27,8 @@ SEMIS = ("semiconductor", "chipmaker", "chip maker", "foundry")
 TELECOM = ("telecom", "telecommunications", "carrier", "ISP", "wireless", "broadband")
 MANUFACTURING = ("manufacturing", "manufacturer", "factory", "industrial", "OT", "ICS", "SCADA")
 TRANSPORT = ("airline", "airport", "logistics", "shipping", "freight", "railway", "trucking", "port", "transportation")
+CRUISE = ("cruise", "cruise line", "cruise lines", "cruise ship", "maritime", "shipping company", "port", "vessel",
+          "travel", "hospitality")
 AUTO = ("car rental", "rental car", "automotive", "automaker", "car dealership", "dealerships", "vehicle")
 RETAIL = ("retail", "retailer", "e-commerce", "point-of-sale", "POS", "store", "shoppers")
 HOSPITALITY = ("hotel", "hotels", "hospitality", "casino", "resort")
@@ -49,6 +51,7 @@ SIC_SECTORS: tuple[tuple[int, int, str, tuple[str, ...]], ...] = (
     (4952, 4952, "Water and Wastewater Systems", WATER),
     (6320, 6329, "Healthcare and Public Health", INSURANCE + HEALTH),
     (7500, 7549, "Transportation Systems", AUTO),
+    (4400, 4499, "Transportation Systems", CRUISE),
     (100, 999, "Food and Agriculture", FOOD),
     (1300, 1399, "Energy", OIL_GAS),
     (1000, 1499, "Critical Manufacturing", ("mining", "mine") + MANUFACTURING),

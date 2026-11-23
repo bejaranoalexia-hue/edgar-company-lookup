@@ -57,7 +57,7 @@ def build(args: argparse.Namespace) -> dict:
         news_section = run("industry_news", errors, news.search_industry, sector["news_terms"], args.refresh)
 
     filing_text = "\n".join(
-        [m.get("snippet") or "" for m in vendors.get("mentions") or []]
+        [f"{v.get('name')} {v.get('quote') or ''}" for v in vendors.get("vendors") or []]
         + [s.get("detail") or "" for s in cyber.get("signals") or []]
     )
     tech = [name for name in (args.tech or "").split(",") if name.strip()]

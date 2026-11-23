@@ -43,11 +43,12 @@ def error_or_note(payload: dict) -> str:
     return f"<p>{esc(payload.get('note'))}</p>" if payload.get("note") else ""
 
 
-def dei(item: object, money_value: bool = False) -> str:
-    if not isinstance(item, dict):
+def employees(item: object) -> str:
+    if not isinstance(item, dict) or not isinstance(item.get("value"), (int, float)):
         return "Not reported"
-    value = money(item["value"]) if money_value else f"{item['value']:,}"
-    return f"{value} (as of {esc(item.get('as_of'))})"
+    source = link(item.get("url"), f"{item.get('form') or '10-K'} filed {item.get('as_of')}")
+    quote = f'<br><span class="meta">"{esc(item["quote"])}"</span>' if item.get("quote") else ""
+    return f"<strong>{item['value']:,}</strong> ({source}){quote}"
 
 
 # ---------------------------------------------------------------- sections
@@ -73,13 +74,10 @@ def company_html(company: dict, industry: dict) -> str:
         ("News terms", esc(", ".join(industry.get("news_terms") or []))),
     ]
     size_rows = [
+        ("Employees", employees(size.get("employees"))),
         ("Size band", esc(size.get("size_band") or "Unknown")),
-        ("Filer category", esc(size.get("filer_category"))),
         (f"Revenue (FY ending {size.get('fiscal_period_end') or 'n/a'})", esc(money(size.get("revenue")))),
-        ("Total assets", esc(money(size.get("total_assets")))),
-        ("Public float", dei(size.get("public_float_usd"), money_value=True)),
-        ("Shares outstanding", dei(size.get("shares_outstanding"))),
-        ("Employees", dei(size.get("employees"))),
+        ("Filer category", esc(size.get("filer_category"))),
     ]
     return (
         "<section><h2>Who the company is</h2>"
@@ -170,29 +168,28 @@ def kev_html(kev: dict) -> str:
 
 
 def financials_html(financials: dict) -> str:
-    head = "<section><h2>Latest annual financials</h2>"
+    head = "<section><h2>Latest annual income statement</h2>"
     if financials.get("error"):
         return head + error_or_note(financials) + "</section>"
     blocks = []
     for period in financials.get("statements") or []:
         blocks.append(f'<p class="meta">{esc(period.get("form"))} for the year ending {esc(period.get("period_end"))}, '
                       f"filed {esc(period.get('filed'))}.</p>")
-        for key, title in (("income_statement", "Income statement"), ("balance_sheet", "Balance sheet"), ("cash_flow", "Cash flow")):
-            rows = [(line.get("label"), esc(money(line.get("value"), line.get("unit")))) for line in period.get(key) or []]
-            blocks.append(f"<h3>{title}</h3>{table(rows, ('Line', 'Amount'), num=True)}")
+        rows = [(line.get("label"), esc(money(line.get("value"), line.get("unit")))) for line in period.get("income_statement") or []]
+        blocks.append(f"<h3>Income statement</h3>{table(rows, ('Line', 'Amount'), num=True)}")
     return head + "".join(blocks) + "</section>"
 
 
 def vendors_html(vendors: dict) -> str:
-    head = "<section><h2>Suppliers and vendors named in the 10-K</h2>"
-    if vendors.get("error") or not vendors.get("mentions"):
+    head = "<section><h2>Vendors named in the 10-K</h2>"
+    if vendors.get("error") or not vendors.get("vendors"):
         return head + error_or_note(vendors) + "</section>"
-    items = [
-        f"<blockquote><p>{esc(m.get('snippet'))}</p>"
-        f'<p class="meta">{esc(m.get("form"))} filed {esc(m.get("filed"))}. {link(m.get("filing_url"), "Filing")}</p></blockquote>'
-        for m in vendors["mentions"]
-    ]
-    return head + "".join(items) + "</section>"
+    items = "".join(
+        f"<li><strong>{esc(v.get('name'))}</strong>: {esc(v.get('service'))}</li>" for v in vendors["vendors"]
+    )
+    first = vendors["vendors"][0]
+    meta = f'<p class="meta">From the {link(first.get("filing_url"), first.get("form") or "10-K")} filed {esc(first.get("filed"))}.</p>'
+    return head + f"<ul>{items}</ul>" + meta + "</section>"
 
 
 STYLE = """
