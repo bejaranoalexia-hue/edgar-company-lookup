@@ -1,4 +1,6 @@
+scripts/.cache/
 scripts/.edgar_cache/
+__pycache__/
 build/
 batch_*.json
 batch_*_body_only.txt
